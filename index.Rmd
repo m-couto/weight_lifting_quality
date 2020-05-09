@@ -1,0 +1,216 @@
+---
+title: "Activity Quality Prediction"
+author: "Miguel Couto"
+date: "5/9/2020"
+output: html_document
+---
+
+This report pertains to the final project of the Practical Machine Learning course of the Data Science Specialization. Here we analyzed Human Activity Recognition data on the quality of weight lifting exercises. After preprocessing it where we performed intensive feature selection, we performed several prediction models with the aim of predicting how well the weight lifting exercise is being done.
+
+All code in this project was written in R. The source of the data can be found [here](http://groupware.les.inf.puc-rio.br/har).
+
+### Feature selection
+
+Our data measures the quality of weight lifting exercises. More specifically, six male subjects aged between 20-28 performed the Unilateral Dumbbell Biceps Curl in five different fashions:
+
+* exactly according to the specification (Class A),
+
+* throwing the elbows to the front (Class B),
+
+* lifting the dumbbell only halfway (Class C),
+
+* lowering the dumbbell only halfway (Class D)
+
+* and throwing the hips to the front (Class E).
+
+We started by loading and reading the data, as well as a few packages we will use throughout our analysis.
+
+```{r message=FALSE, cache=TRUE}
+setwd("~/Desktop/Data Science course/8. Practical Machine Learning/Project")    # local directory
+
+if (!file.exists("training.csv")){
+    fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+    download.file(fileUrl, destfile="training.csv", method="curl")
+}
+
+trainingdat <- read.csv("training.csv")
+
+library(caret)
+library(nnet)       # for multiclass logistic regression
+library(randomForest)
+library(e1071)      # for svm models
+library(gbm)        # for boosting
+```
+
+The first thing to do now is to split our data set into three parts: training, testing and validation.
+
+```{r cache=TRUE}
+set.seed(3250234)
+inTrain <- createDataPartition(trainingdat$classe, p=.7, list=FALSE)
+validation <- trainingdat[-inTrain,]
+trainingdat <- trainingdat[inTrain,]
+
+inTrain <- createDataPartition(trainingdat$classe, p=.7, list=FALSE)
+testing <- trainingdat[-inTrain,]
+training <- trainingdat[inTrain,]
+```
+
+We will mostly focus on the training data set while building our models; we will use the testing set for cross-validation and combine our models, while the validation set will only be accessed at the end and will give us the best estimate of our out-of-sample error. Before that, we must pre-process our data.
+
+```{r}
+dim(training)
+```
+
+```{r results="hide"}
+str(training)
+```
+
+Our training data set has 9619 observations of 160 features, the last of which is classe, the feature we want to be able to predict. A quick summary of our data reveals several problems we must fix:
+
+- some variables have many missing values;
+
+- some factor variables are quite sparse and have too many levels (e.g. kurtosis_roll_belt has 397 levels);
+
+- some factor variables have strange levels, possibly pertaining to errors (e.g. kurtosis_yaw_belt has two levels, "" and "#DIV/0!").
+
+It is not hard to notice that there is a pattern in the features with the problems mentioned above. These are statistical summaries of other features, namely maximum (max_), minimum (min_), range (amplitude_), variance (var_), mean (avg_), standard deviation (stddev_), kurtosis (kurtosis_) and skewness (skewness_).
+
+```{r}
+table( colSums(is.na(training)) )
+```
+
+```{r results="hide"}
+ind <- grep("^(max|min|amplitude|var|avg|stddev|kurtosis|skewness)_", names(training))
+str(training[,ind])
+```
+
+```{r}
+table(training$new_window)
+
+ind <- c(1, 6, ind)
+training <- training[, -ind]
+```
+
+Note that 93 features out of 160 contain missing values, and each of these features contains 9407 missing values out of 9619 observations, i.e. these features have approximately 97.8% of missing values. Given this abundance of missing values we have decided to not consider these features in our analysis.
+
+Moreover, we will not consider the factor variables with either too many levels or levels possibly pertaining to errors. As mentioned above, the names of these features follow a pattern so they are easy to select and remove.
+
+Furthermore, the first feature is simply the unique sequential number of the observation, which seems irrelevant for predicting the quality of exercise. The sixth feature new_window represents a new time window for sliding window feature extraction, and it is highly skewed with 9419 "no"s out of 9619 observations (i.e. 98% "no"s), so we have also decided to discard it from our models. This concludes the feature selection of our data.
+
+In order to keep consistency, we apply the exact same pre-processing to the testing and validation data sets as well.
+
+```{r}
+testing <- testing[, -ind]
+validation <- validation[, -ind]
+```
+
+We now look at the construction of our prediction model.
+
+### Prediction model
+
+Since we want to predict the class (A, B, C, D, E) to which an observation belongs, this is a classification problem with multiple classes. Therefore, there are several models we can use here. We have chosen the following:
+
+1. multiclass logistic regression, via neural networks,
+
+2. random forest model,
+
+3. and support vector machine model.
+
+These are some of the best supervised machine learning methods available today, so we have decided to train each of them on our training set.
+
+```{r cache=TRUE, results="hide"}
+# fit multiclass logistic regression model (via neural networks) to training set
+logreg.fit <- multinom(classe~., data=training)
+
+# fit random forest model to training set
+rf.fit <- randomForest(classe~., data=training)
+
+# fit a support vector machine model to training set
+svm.fit <- svm(classe~., data=training)
+```
+
+We use cross-validation in our testing set:
+
+- we predict the result of each the models above in our testing set;
+
+- we combine all these predictions and apply a combined model of random forest to them.
+
+```{r cache=TRUE}
+# Predicting on testing data set
+logreg.pred <- predict(logreg.fit, testing)
+rf.pred <- predict(rf.fit, testing)
+svm.pred <- predict(svm.fit, testing)
+
+# combined predictions in a new dataframe
+comb.data <- data.frame(logreg = logreg.pred,
+                       rf = rf.pred,
+                       svm = svm.pred,
+                       classe = testing$classe)
+
+# combined model: random forest
+comb.fit <- train(classe~., data=comb.data, method="rf")
+
+# prediction of combined model on testing set
+comb.pred <- predict(comb.fit, comb.data)
+
+# accuracy on testing set
+confusionMatrix(comb.pred, testing$classe)
+```
+
+The combined model seems to be performing very well in the testing set. This is, however, not a good estimate of our out-of-sample error, as our model was also trained in the testing set.
+
+#### Out-of-sample error
+
+We now apply our combined model to the validation set to obtain our best estimate of the out-of-sample error.
+
+```{r cache=TRUE}
+logreg.val <- predict(logreg.fit, validation)
+rf.val <- predict(rf.fit, validation)
+svm.val <- predict(svm.fit, validation)
+
+comb.val <- data.frame(logreg = logreg.val,
+                       rf = rf.val,
+                       svm = svm.val)
+
+comb.pred <- predict(comb.fit, comb.val)
+confusionMatrix(comb.pred, validation$classe)
+```
+
+Our out-of-sample accuracy is 0.9975, so our out-of-sample error is 0.0025. Moreover, both specificity and sensitivity are quite high for all classes, therefore our model seems to be performing very well in new data.
+
+
+#### Quiz predictions
+
+We also include here the code we used for predicting the answer to the 20 observations of the quiz. Note that this data set contains no class feature. For the purposes of not disclosing the quiz answers, I do not include the results here.
+
+```{r cache=TRUE, results="hide"}
+if (!file.exists("testing.csv")){
+    fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+    download.file(fileUrl, destfile="testing.csv", method="curl")
+}
+
+quizdat <- read.csv("testing.csv")
+quizdat <- quizdat[,-c(ind)]        # pre-processing
+
+# same levels on factor variables
+levels(quizdat$cvtd_timestamp) <- levels(training$cvtd_timestamp)
+levels(quizdat$new_window) <- levels(training$new_window)
+
+# predictions of each model for quiz
+logreg.quiz <- predict(logreg.fit, quizdat)
+rf.quiz <- predict(rf.fit, quizdat)
+svm.quiz <- predict(svm.fit, quizdat)
+
+# prediction of the combined model for the quiz
+comb.quiz <- data.frame(logreg = logreg.quiz,
+                       rf = rf.quiz,
+                       svm = svm.quiz)
+predict(comb.fit, comb.quiz)
+```
+
+
+
+### References
+
+* Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
