@@ -6,6 +6,11 @@ In this project we analyzed Human Activity Recognition data on the quality of we
   - evaluation of these predictions.
 
 
+## Explanation of files
+
 The data can be found here: http://groupware.les.inf.puc-rio.br/har.
 
-The project report can be found in `index.Rmd`, and its html version can be checked here: https://m-couto.github.io/practicalmachinelearning/index.html.
+- `index.Rmd`: the project report.
+  - Check html version here: https://m-couto.github.io/practicalmachinelearning/index.html.
+  
+- `project_code.R`: the R code I wrote for the project.
